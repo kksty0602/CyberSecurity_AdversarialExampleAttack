@@ -5,6 +5,7 @@
 ## 📖 项目简介
 
 本项目旨在探索和复现深度卷积神经网络（CNN）在计算机视觉任务中的表现及其安全性。项目以官方预训练的 ResNet50 模型为基础，包含两个核心实验模块：
+
 1. **基线推理（Baseline Inference）**：实现对本地图像数据集的高效批量分类与置信度评估。
 2. **对抗样本攻击（Adversarial Attack）**：利用梯度下降算法（如 FGSM/PGD）生成微小扰动，实现目标定向攻击（例如：将模型识别高度自信的“犬类”图像，通过像素级干扰，定向欺骗为“母鸡”）。
 
@@ -16,6 +17,7 @@
 * **计算设备**: NVIDIA GeForce RTX 5060 Laptop GPU
 * **编程语言**: Python 3.13
 * **深度学习框架**: PyTorch (Preview / Nightly) + CUDA 13.0
+* **Torchvision**: 0.21.0+cu124
 
 ### 环境配置指南
 
@@ -24,4 +26,5 @@
 ```bash
 
 # 安装支持 CUDA 13.0 的预览版
+
 pip3 install --pre torch torchvision torchaudio --index-url [https://download.pytorch.org/whl/nightly/cu130](https://download.pytorch.org/whl/nightly/cu130)
