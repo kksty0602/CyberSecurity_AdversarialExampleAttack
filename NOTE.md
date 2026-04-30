@@ -60,16 +60,19 @@
 
 - **为什么必须在像素空间执行攻击**：
   ImageNet 预处理将像素从 `[0, 1]` 映射到归一化空间（约 `[-2.1, 2.2]`）。若在归一化空间直接执行 `torch.clamp(tensor, 0, 1)`，会把大量合法像素（如负数）硬生生截断到 `0` 或 `1`，导致：
+  
   1. 扰动方向被严重扭曲——大量像素的梯度信息在边界处丢失；
   2. 反归一化后重新归一化时，实际扰动与预期方向完全无关；
   3. 大 `ε` 下甚至可能出现置信度反弹（如 banana 从 10% 回升到 21%）。
-  **正确做法**：先把张量反归一化到 `[0, 1]`，在像素空间开启梯度追踪并执行 FGSM，最后再重新归一化。由于乘除法均可微，Autograd 能将梯度顺畅地从归一化空间传播回像素空间。
+     **正确做法**：先把张量反归一化到 `[0, 1]`，在像素空间开启梯度追踪并执行 FGSM，最后再重新归一化。由于乘除法均可微，Autograd 能将梯度顺畅地从归一化空间传播回像素空间。
 
 - **PGD（Projected Gradient Descent）原理**：
   PGD 是 FGSM 的多步迭代版本，由 Madry et al. (ICLR 2018) 提出。核心思想是"小碎步 + 反复修正"：
   $$X_{t+1} = \Pi_{\epsilon} \left( \text{clamp}\left( X_t - \alpha \cdot \text{sign}(\nabla_X J(X_t, Y_{target})), 0, 1 \right) \right)$$
   其中：
+  
   - `α` 为每步步长（通常取 `ε/4`）；
   - `Π_ε` 为投影操作，将对抗样本限制在与原始图像的 `L_∞` 距离不超过 `ε` 的邻域内；
   - 多步迭代使攻击能沿着局部梯度持续优化，逐步逼近目标类别，对高置信度或语义差距大的目标（如 banana → cock）成功率远高于单步 FGSM。
+
 - **论文地址**：[*Towards Deep Learning Models Resistant to Adversarial Attacks*](https://arxiv.org/abs/1706.06083), Aleksander Madry et al., ICLR 2018.
