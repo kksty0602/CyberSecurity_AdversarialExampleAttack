@@ -57,4 +57,33 @@
 - 预留的缓存接口在接入 Streamlit 后只需取消注释即可生效，避免重复加载 200MB+ 权重。
 - 批量推理输出与重构前保持一致，异常输入可被安全拦截。
 
+## 2026/04/30 - 阶段二任务 2.1：构建定向攻击引擎基础架构
+
+**修改内容**：
+- 新建 `core/attack_engine.py`，继承 `AdversarialModel` 构建 `AttackEngine` 攻击引擎类。
+- 添加 `prepare_adversarial_input(image_tensor)` 方法：通过 `.clone().detach()` 复制原始张量，显式调用 `.requires_grad_(True)` 开启输入域梯度追踪，并确保张量与模型均处于 `self.device`（RTX 5060 CUDA）上。
+- 添加 `zero_gradients(input_tensor)` 辅助方法：在每次计算新的攻击梯度前，调用 `self.model.zero_grad()` 清空模型参数梯度；若传入输入张量，则同时清空其累积梯度，防止梯度累积导致攻击方向偏差。
+- 在 `prepare_adversarial_input` 中自动调用 `self.model.eval()`，确保攻击阶段模型处于确定性推理态。
+- 关键步骤补充中文注释，解释梯度追踪在对抗攻击中的必要性（Autograd 计算 Data Gradient 的前提）。
+
+**实验预期**：
+- `AttackEngine` 可被后续 FGSM/PGD 实现直接继承或调用，提供标准化的对抗输入准备与梯度清理能力。
+- 在 RTX 5060 上，攻击张量与模型参数均位于 `cuda:0`，推理与反向传播均在 GPU 上完成。
+- 连续生成多个对抗样本时，梯度清零机制确保每次攻击方向独立，不受前次梯度残留干扰。
+
+## 2026/04/30 - 阶段二任务 2.2：实现定向损失计算与梯度提取
+
+**修改内容**：
+- 在 `core/attack_engine.py` 的 `AttackEngine` 类中新增 `compute_targeted_loss(input_tensor, target_id)` 方法。
+- 使用 `torch.nn.CrossEntropyLoss()` 计算模型输出 logits 与指定目标类别 `target_id`（如 7 代表母鸡）之间的定向损失。
+- 方法内部显式调用 `self.model.eval()`，关闭 Dropout 等随机层，确保攻击过程中梯度计算稳定、可复现。
+- 新增 `extract_gradient(loss, input_tensor)` 方法：对损失调用 `.backward()`，通过链式法则反向传播至输入层；从 `input_tensor.grad.data` 中提取数据域梯度 `data_grad`。
+- 在 `extract_gradient` 开头显式调用 `self.model.zero_grad()` 与 `input_tensor.grad.zero_()`，彻底清理残余梯度，防止历史推理干扰本次攻击。
+- 补充中文注释，解释定向攻击中为何针对 `target_id` 计算损失（最小化目标类别损失等价于最大化模型对目标类别的置信度），以及 `loss.backward()` 如何通过链式法则将分类误差转化为像素修改建议。
+
+**实验预期**：
+- 给定一张测试图与目标类别 ID，`compute_targeted_loss` 能返回可反向传播的损失标量。
+- `extract_gradient` 能正确输出形状与输入图像相同的梯度张量，且梯度非零，表明链式法则已成功将误差从输出层传回像素层。
+- 整个求导过程在 RTX 5060 的 CUDA 环境下完成，无显存泄漏或残余梯度干扰。
+
 ---

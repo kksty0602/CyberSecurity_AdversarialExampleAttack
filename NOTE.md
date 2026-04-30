@@ -19,3 +19,24 @@
 - **单一职责**：将模型加载、预处理、推理、设备管理拆分为独立方法，便于单元测试与后续维护。
 - **数据流解耦**：`predict()` 返回结构化 Dict 而非直接 print，使 Web 框架（Streamlit/Gradio/FastAPI）可直接将结果序列化为 JSON 响应。
 - **缓存预留**：通过注释模板预留 `@st.cache_resource` 工厂函数，确保在 Web 会话生命周期内模型仅实例化一次，避免 200MB+ 权重的重复加载与显存泄漏。
+
+## 对抗攻击中的梯度追踪原理
+
+- **Data Gradient**：在基于梯度的对抗攻击（FGSM/PGD）中，核心需求是计算损失函数对输入图像的梯度 $\nabla_X J(X, Y)$。只有将输入张量的 `requires_grad` 设为 `True`，PyTorch Autograd 才能在反向传播时记录从输出到输入的完整计算图，从而得到 $\partial \text{Loss} / \partial X$。
+- **FGSM 原始公式**（Goodfellow et al., ICLR 2015）：
+  - 非定向攻击：$X_{adv} = X + \epsilon \cdot \text{sign}(\nabla_X J(X, Y_{true}))$
+  - 定向攻击：$X_{adv} = X - \epsilon \cdot \text{sign}(\nabla_X J(X, Y_{target}))$
+- **论文地址**：[*Explaining and Harnessing Adversarial Examples*](https://arxiv.org/abs/1412.6572), Ian J. Goodfellow, Jonathon Shlens, Christian Szegedy, ICLR 2015.
+- **梯度清零必要性**：在迭代攻击或多轮样本生成中，若不清空梯度，前一轮的 `grad` 会累积到本轮，导致扰动方向偏离真实的损失上升/下降方向，攻击成功率显著下降。
+
+## 定向损失与反向传播链式法则
+
+- **CrossEntropyLoss 在定向攻击中的作用**：
+  定向攻击的目标是迫使模型将输入错分为指定类别 $Y_{target}$。
+  `CrossEntropyLoss(output, target_id)` 衡量模型输出 logits 与目标类别的差距；**损失越小**，模型对目标类别的 Softmax 概率越高。
+  因此，通过降低该损失，即可实现"让模型认错"的效果。
+- **链式法则（Chain Rule）**：
+  `loss.backward()` 自动执行反向传播：
+  $$\frac{\partial L}{\partial X} = \frac{\partial L}{\partial f_{out}} \cdot \frac{\partial f_{out}}{\partial f_{n-1}} \cdots \frac{\partial f_{1}}{\partial X}$$
+  其中 $\partial L / \partial X$ 即为 Data Gradient，其每个元素对应一个像素通道的修改灵敏度。
+  FGSM 利用该梯度的符号构造扰动：$X_{adv} = X - \epsilon \cdot \text{sign}(\nabla_X J(X, Y_{target}))$。
