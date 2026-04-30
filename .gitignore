@@ -1,0 +1,14 @@
+# Claude local cache/config
+.claude/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Virtual environments
+.env
+.venv
+env/
+venv/
