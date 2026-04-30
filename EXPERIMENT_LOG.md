@@ -86,4 +86,21 @@
 - `extract_gradient` 能正确输出形状与输入图像相同的梯度张量，且梯度非零，表明链式法则已成功将误差从输出层传回像素层。
 - 整个求导过程在 RTX 5060 的 CUDA 环境下完成，无显存泄漏或残余梯度干扰。
 
+## 2026/04/30 - 阶段二任务 2.3：生成对抗扰动并封装参数接口
+
+**修改内容**：
+- 在 `core/attack_engine.py` 的 `AttackEngine` 类中新增 `generate_targeted_adversarial(original_tensor, target_id, epsilon)` 方法。
+- 严格按照 FGSM 定向攻击公式实现：`X_adv = X - epsilon * sign(∇_X J(X, Y_target))`。
+- 方法内部自动串联 `prepare_adversarial_input` → `compute_targeted_loss` → `extract_gradient` → 构造扰动 → 截断像素值。
+- 使用 `torch.clamp(adv_tensor, 0.0, 1.0)` 将对抗样本像素限制在合法范围，防止反归一化后图像溢出失真。
+- 返回三元组：`adv_tensor`（对抗样本）、`perturbation`（纯噪声，用于热力图可视化）、`data_grad`（原始梯度）。
+- 新增 `tensor_to_image(tensor)` 方法：执行 ImageNet 反归一化（x = x_norm * std + mean），将张量还原为 PIL Image，便于后续可视化与保存。
+- `tensor_to_image` 中再次调用 `torch.clamp` 确保输出像素在 [0, 1]，映射到 [0, 255] 后生成 uint8 图像。
+
+**实验预期**：
+- 给定一张测试图、目标类别（如 7 代表母鸡）与 epsilon（如 0.03），`generate_targeted_adversarial` 能返回可正确显示的对抗样本。
+- 原始图像与对抗样本在人眼上几乎无法区分（epsilon 较小时），但模型预测结果从原标签变为 target_id。
+- `tensor_to_image` 可直接将预处理后的张量或对抗样本转换为 PIL Image，用于 Matplotlib/Streamlit 展示。
+- 整个流程在 RTX 5060 的 CUDA 环境下完成，无显存泄漏。
+
 ---

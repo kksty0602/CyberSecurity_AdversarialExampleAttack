@@ -2,9 +2,11 @@
 # 阶段二任务 2.1：构建定向攻击引擎基础架构
 # 功能：基于 AdversarialModel 扩展攻击相关基础方法，为后续 FGSM/PGD 定向攻击提供支持
 
-from typing import Optional
+from typing import Optional, Tuple
 
+import numpy as np
 import torch
+from PIL import Image
 
 from core.loadModel import AdversarialModel
 
@@ -141,3 +143,85 @@ class AttackEngine(AdversarialModel):
         data_grad = input_tensor.grad.data
 
         return data_grad
+
+    def generate_targeted_adversarial(
+        self,
+        original_tensor: torch.Tensor,
+        target_id: int,
+        epsilon: float,
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """
+        基于 FGSM 算法生成定向对抗样本。
+
+        核心公式（Goodfellow et al., ICLR 2015）：
+            X_adv = X - epsilon * sign(∇_X J(X, Y_target))
+        在定向攻击中，我们最小化目标类别的交叉熵损失，因此使用减号，
+        使扰动方向朝着"让模型更确信是 target_id"的方向前进。
+
+        为什么返回 perturbation：
+        可视化噪声热力图需要纯扰动张量（即 epsilon * sign(grad)），
+        与原始图像叠加前的独立噪声便于后续分析干扰的空间分布。
+
+        Args:
+            original_tensor: 原始图像的预处理张量，形状 (1, C, H, W)。
+            target_id: 目标类别索引（如 7 代表母鸡）。
+            epsilon: 扰动强度，控制每个像素的最大改变量（典型值 0.01 ~ 0.1）。
+
+        Returns:
+            Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+                - adv_tensor: 对抗样本张量，形状同输入，像素值已截断至 [0, 1]。
+                - perturbation: 纯扰动张量（epsilon * sign(grad)），用于热力图可视化。
+                - data_grad: 原始输入域梯度，可用于进一步分析或迭代攻击。
+        """
+        # 1. 准备对抗输入：克隆、开启梯度追踪、移至 GPU
+        adv_input = self.prepare_adversarial_input(original_tensor)
+
+        # 2. 计算定向损失：让模型"靠近" target_id
+        loss = self.compute_targeted_loss(adv_input, target_id)
+
+        # 3. 反向传播提取输入域梯度
+        data_grad = self.extract_gradient(loss, adv_input)
+
+        # 4. 根据 FGSM 公式构造扰动：定向攻击使用减号
+        perturbation = epsilon * data_grad.sign()
+
+        # 5. 生成对抗样本：原始图像减去扰动（因为我们想最小化目标损失）
+        adv_tensor = adv_input - perturbation
+
+        # 6. 截断像素值到合法范围 [0, 1]，防止数值溢出导致图像失真
+        adv_tensor = torch.clamp(adv_tensor, 0.0, 1.0)
+
+        return adv_tensor, perturbation, data_grad
+
+    def tensor_to_image(self, tensor: torch.Tensor) -> Image.Image:
+        """
+        将经过 ImageNet 归一化的张量还原为可显示的 PIL Image。
+
+        预处理时 torchvision 执行了 Normalize(mean, std)：
+            x_norm = (x - mean) / std
+        因此反归一化需要：
+            x = x_norm * std + mean
+        然后再从 (C, H, W) 转置为 (H, W, C)，并映射到 [0, 255]。
+
+        Args:
+            tensor: 归一化后的图像张量，形状 (1, C, H, W) 或 (C, H, W)，值域经归一化后可能超出 [0, 1]。
+
+        Returns:
+            Image.Image: 反归一化后的 PIL RGB 图像。
+        """
+        # ImageNet 官方归一化参数
+        mean = torch.tensor([0.485, 0.456, 0.406], device=tensor.device).view(3, 1, 1)
+        std = torch.tensor([0.229, 0.224, 0.225], device=tensor.device).view(3, 1, 1)
+
+        # 去除 Batch 维度（若存在）
+        if tensor.dim() == 4:
+            tensor = tensor.squeeze(0)
+
+        # 反归一化：x = x_norm * std + mean
+        tensor = tensor * std + mean
+
+        # 截断到合法像素范围 [0, 1]，再映射到 [0, 255]
+        tensor = torch.clamp(tensor, 0.0, 1.0)
+        arr = (tensor.permute(1, 2, 0).cpu().numpy() * 255).astype(np.uint8)
+
+        return Image.fromarray(arr)

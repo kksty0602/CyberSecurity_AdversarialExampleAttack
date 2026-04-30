@@ -40,3 +40,18 @@
   $$\frac{\partial L}{\partial X} = \frac{\partial L}{\partial f_{out}} \cdot \frac{\partial f_{out}}{\partial f_{n-1}} \cdots \frac{\partial f_{1}}{\partial X}$$
   其中 $\partial L / \partial X$ 即为 Data Gradient，其每个元素对应一个像素通道的修改灵敏度。
   FGSM 利用该梯度的符号构造扰动：$X_{adv} = X - \epsilon \cdot \text{sign}(\nabla_X J(X, Y_{target}))$。
+
+## FGSM 对抗样本生成与像素截断
+
+- **FGSM 定向攻击公式**（Goodfellow et al., ICLR 2015）：
+  $$X_{adv} = X - \epsilon \cdot \text{sign}(\nabla_X J(X, Y_{target}))$$
+  - 非定向攻击用加号（最大化真实标签损失）；**定向攻击用减号**（最小化目标标签损失）。
+  - $\epsilon$ 控制扰动强度，值越大攻击越明显、成功率越高，但人眼可察觉。
+  - `sign()` 只保留梯度方向（+1 / -1 / 0），忽略大小，确保扰动在每个像素上绝对值相同。
+- **像素截断（Clamp）的必要性**：
+  归一化后的图像像素值原本在 [0, 1] 之间。加上或减去扰动后可能溢出该范围（如 < 0 或 > 1）。
+  使用 `torch.clamp(tensor, 0.0, 1.0)` 将像素硬性截断回合法区间，保证反归一化后不会生成无效的灰度/色彩值。
+- **反归一化（Denormalize）**：
+  预处理时执行了 `Normalize(mean, std)`，因此还原图像需执行逆运算：
+  $$x = x_{norm} \times \text{std} + \text{mean}$$
+  其中 mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]。
