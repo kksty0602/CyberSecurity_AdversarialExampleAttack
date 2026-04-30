@@ -151,47 +151,139 @@ class AttackEngine(AdversarialModel):
         epsilon: float,
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """
-        基于 FGSM 算法生成定向对抗样本。
+        基于 FGSM 算法在像素空间生成定向对抗样本。
 
-        核心公式（Goodfellow et al., ICLR 2015）：
-            X_adv = X - epsilon * sign(∇_X J(X, Y_target))
-        在定向攻击中，我们最小化目标类别的交叉熵损失，因此使用减号，
-        使扰动方向朝着"让模型更确信是 target_id"的方向前进。
+        核心改进：将攻击从归一化空间迁移到像素空间 [0, 1]，
+        在像素空间开启梯度追踪并执行扰动，彻底避免归一化空间 clamp 导致的信息丢失。
 
-        为什么返回 perturbation：
-        可视化噪声热力图需要纯扰动张量（即 epsilon * sign(grad)），
-        与原始图像叠加前的独立噪声便于后续分析干扰的空间分布。
+        核心公式（像素空间）：
+            X_adv_pixel = clamp( X_pixel - epsilon * sign( grad_pixel ), 0, 1 )
+        其中 grad_pixel = d(Loss) / d(X_pixel)。
 
         Args:
-            original_tensor: 原始图像的预处理张量，形状 (1, C, H, W)。
+            original_tensor: 原始图像预处理张量，形状 (1, C, H, W)。
             target_id: 目标类别索引（如 7 代表母鸡）。
-            epsilon: 扰动强度，控制每个像素的最大改变量（典型值 0.01 ~ 0.1）。
+            epsilon: 扰动强度（像素空间），控制每个像素的最大改变量（典型值 0.01 ~ 0.1）。
 
         Returns:
             Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-                - adv_tensor: 对抗样本张量，形状同输入，像素值已截断至 [0, 1]。
-                - perturbation: 纯扰动张量（epsilon * sign(grad)），用于热力图可视化。
-                - data_grad: 原始输入域梯度，可用于进一步分析或迭代攻击。
+                - adv_tensor: 对抗样本张量（归一化空间），供 predict() 直接使用。
+                - perturbation: 纯扰动张量（像素空间），用于热力图可视化。
+                - pixel_grad: 像素空间梯度，可用于进一步分析。
         """
-        # 1. 准备对抗输入：克隆、开启梯度追踪、移至 GPU
-        adv_input = self.prepare_adversarial_input(original_tensor)
+        mean = torch.tensor([0.485, 0.456, 0.406], device=self.device).view(1, 3, 1, 1)
+        std = torch.tensor([0.229, 0.224, 0.225], device=self.device).view(1, 3, 1, 1)
 
-        # 2. 计算定向损失：让模型"靠近" target_id
-        loss = self.compute_targeted_loss(adv_input, target_id)
+        # 1. 反归一化到像素空间 [0, 1]
+        pixel_input = original_tensor.clone().detach().to(self.device)
+        pixel_input = pixel_input * std + mean
 
-        # 3. 反向传播提取输入域梯度
-        data_grad = self.extract_gradient(loss, adv_input)
+        # 2. 在像素空间开启梯度追踪（攻击在此空间执行，避免归一化空间 clamp 扭曲）
+        pixel_input.requires_grad_(True)
 
-        # 4. 根据 FGSM 公式构造扰动：定向攻击使用减号
-        perturbation = epsilon * data_grad.sign()
+        # 3. 重新归一化后送入模型前向传播
+        norm_input = (pixel_input - mean) / std
+        self.model.eval()
+        output = self.model(norm_input)
 
-        # 5. 生成对抗样本：原始图像减去扰动（因为我们想最小化目标损失）
-        adv_tensor = adv_input - perturbation
+        # 4. 计算定向损失：最小化目标类别的交叉熵
+        target = torch.tensor([target_id], dtype=torch.long, device=self.device)
+        criterion = torch.nn.CrossEntropyLoss()
+        loss = criterion(output, target)
 
-        # 6. 截断像素值到合法范围 [0, 1]，防止数值溢出导致图像失真
-        adv_tensor = torch.clamp(adv_tensor, 0.0, 1.0)
+        # 5. 反向传播到像素空间，得到像素域梯度
+        self.model.zero_grad()
+        loss.backward()
+        pixel_grad = pixel_input.grad.data
 
-        return adv_tensor, perturbation, data_grad
+        # 6. 像素空间 FGSM：定向攻击用减号（最小化目标损失）
+        perturbation = epsilon * pixel_grad.sign()
+        pixel_adv = pixel_input - perturbation
+
+        # 7. 在像素空间执行合法的 [0, 1] 截断
+        pixel_adv = torch.clamp(pixel_adv, 0.0, 1.0)
+
+        # 8. 重新归一化，供模型后续推理
+        adv_tensor = (pixel_adv - mean) / std
+
+        return adv_tensor, perturbation, pixel_grad
+
+    def generate_targeted_pgd(
+        self,
+        original_tensor: torch.Tensor,
+        target_id: int,
+        epsilon: float,
+        alpha: Optional[float] = None,
+        num_iter: int = 10,
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        """
+        基于 PGD（Projected Gradient Descent）的定向对抗样本生成。
+
+        PGD 是 FGSM 的多步迭代版本，每步只走一小步（步长 alpha），
+        然后将结果投影回原始样本的 epsilon 邻域内，最后做像素截断。
+        对于高置信度或大类间攻击（如 banana → cock），PGD 成功率远高于单步 FGSM。
+
+        算法流程：
+            X_0 = X
+            for t = 1 to num_iter:
+                X_t = X_{t-1} - alpha * sign( grad(X_{t-1}) )
+                X_t = clip_{epsilon}( X_t, X )   # 投影回 epsilon 邻域
+                X_t = clamp( X_t, 0, 1 )         # 截断到合法像素范围
+            return X_{num_iter}
+
+        Args:
+            original_tensor: 原始图像预处理张量，形状 (1, C, H, W)。
+            target_id: 目标类别索引。
+            epsilon: 最大扰动半径（像素空间 L-inf 范数）。
+            alpha: 每步步长，默认 epsilon / 4。
+            num_iter: 迭代次数，默认 10。
+
+        Returns:
+            Tuple[torch.Tensor, torch.Tensor]:
+                - adv_tensor: 对抗样本（归一化空间）。
+                - total_perturbation: 总扰动量（像素空间）。
+        """
+        if alpha is None:
+            alpha = epsilon / 4.0
+
+        mean = torch.tensor([0.485, 0.456, 0.406], device=self.device).view(1, 3, 1, 1)
+        std = torch.tensor([0.229, 0.224, 0.225], device=self.device).view(1, 3, 1, 1)
+
+        # 反归一化到像素空间
+        pixel_orig = original_tensor.clone().detach().to(self.device)
+        pixel_orig = pixel_orig * std + mean  # [0, 1] 空间
+
+        # 初始化对抗样本
+        pixel_adv = pixel_orig.clone()
+
+        for i in range(num_iter):
+            pixel_adv.requires_grad_(True)
+
+            # 归一化后送入模型
+            norm_input = (pixel_adv - mean) / std
+            output = self.model(norm_input)
+
+            target = torch.tensor([target_id], dtype=torch.long, device=self.device)
+            criterion = torch.nn.CrossEntropyLoss()
+            loss = criterion(output, target)
+
+            self.model.zero_grad()
+            loss.backward()
+            grad = pixel_adv.grad.data
+
+            # 单步更新：像素空间梯度下降
+            pixel_adv = pixel_adv - alpha * grad.sign()
+
+            # 投影回 epsilon 邻域：限制与原始样本的距离
+            perturbation = torch.clamp(pixel_adv - pixel_orig, -epsilon, epsilon)
+            pixel_adv = pixel_orig + perturbation
+
+            # 截断到合法像素范围
+            pixel_adv = torch.clamp(pixel_adv, 0.0, 1.0).detach()
+
+        total_perturbation = pixel_adv - pixel_orig
+        adv_tensor = (pixel_adv - mean) / std
+        return adv_tensor, total_perturbation
 
     def tensor_to_image(self, tensor: torch.Tensor) -> Image.Image:
         """
