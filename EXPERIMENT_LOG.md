@@ -27,4 +27,34 @@
 - 脚本可直接运行，正确输出每张图像的 Top-1 识别标签与置信度（保留两位小数），并附 Top-2 ~ Top-5 详情。
 - 若网络可达，标签为人类可读英文单词；否则显示数字 ID。
 
+## 2026/04/30 - 任务 1.2：重构模型加载脚本（面向对象 + 环境验证 + 全局缓存）
+
+**修改内容**：
+- 重构 `model/loadModel.py`，将过程式代码升级为面向对象的 `ResNet50Predictor` 类。
+- 新增 `verify_environment()` 函数，自动检查 Python 版本、PyTorch 版本、CUDA 版本及 GPU 计算能力（sm_120）。
+- 引入 `@_st_cache_resource` 兼容层，在 Streamlit 环境下可自动启用 `st.cache_resource` 全局缓存，避免 Web 端重复加载模型。
+- 保留批量推理基准测试功能，输出格式维持 Top-1 主结果 + Top-2 ~ Top-5 缩进详情。
+- 关键步骤补充中文注释，符合项目技术约束。
+
+**实验预期**：
+- 脚本运行时首先打印环境验证报告，确保 RTX 5060 的 CUDA 13.0 与 sm_120 算力得到正确识别。
+- `ResNet50Predictor` 类可被 Web 模块直接导入复用，模型实例在 Streamlit 会话中仅加载一次。
+- 批量推理结果与重构前保持一致，Top-1/Top-5 置信度输出无误。
+
+## 2026/04/30 - 优化：第一阶段代码重构与 Web 适配
+
+**修改内容**：
+- 重构 `model/loadModel.py`，取消零散推理脚本，统一封装为 `AdversarialModel` 类。
+- `__init__` 负责加载 `ResNet50_Weights.DEFAULT` 权重并自动检测 CUDA 环境（RTX 5060）。
+- `preprocess(image)` 封装标准 ImageNet 预处理（Resize, CenterCrop, Normalize），支持 PIL Image 与 NumPy 数组输入。
+- `predict(image_tensor)` 返回结构化的 Dict（含 topk_ids / topk_names / topk_confs），不再直接 print，便于 Web 端序列化为 JSON。
+- 新增 `to_device()` 方法显式管理显存，确保推理严格在 `cuda:0` 执行；使用 `torch.inference_mode()` 替代 `torch.no_grad()` 以提升推理速度。
+- 增加 `validate_image_path()` 输入校验，非法格式或损坏图片不会导致后端崩溃。
+- 在文件底部预留 `get_adversarial_model()` 工厂函数与 `@st.cache_resource` 注释模板，供后续 Streamlit Web 端直接启用单例缓存。
+
+**实验预期**：
+- `AdversarialModel` 可被 Web 模块直接导入复用，数据流完全解耦。
+- 预留的缓存接口在接入 Streamlit 后只需取消注释即可生效，避免重复加载 200MB+ 权重。
+- 批量推理输出与重构前保持一致，异常输入可被安全拦截。
+
 ---
