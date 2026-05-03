@@ -285,6 +285,62 @@ class AttackEngine(AdversarialModel):
         adv_tensor = (pixel_adv - mean) / std
         return adv_tensor, total_perturbation
 
+    def generate_targeted_pgd_with_history(
+        self,
+        original_tensor: torch.Tensor,
+        target_id: int,
+        epsilon: float,
+        alpha: Optional[float] = None,
+        num_iter: int = 10,
+    ):
+        """
+        带迭代历史记录的 PGD 攻击，返回每轮目标类别的置信度。
+
+        Returns:
+            Tuple[torch.Tensor, torch.Tensor, List[float]]:
+                - adv_tensor: 对抗样本（归一化空间）
+                - total_perturbation: 总扰动量（像素空间）
+                - history: 每轮迭代后目标类别的置信度百分比列表
+        """
+        if alpha is None:
+            alpha = epsilon / 4.0
+
+        mean = torch.tensor([0.485, 0.456, 0.406], device=self.device).view(1, 3, 1, 1)
+        std = torch.tensor([0.229, 0.224, 0.225], device=self.device).view(1, 3, 1, 1)
+
+        pixel_orig = original_tensor.clone().detach().to(self.device)
+        pixel_orig = pixel_orig * std + mean
+
+        pixel_adv = pixel_orig.clone()
+        history = []
+
+        for _ in range(num_iter):
+            pixel_adv.requires_grad_(True)
+            norm_input = (pixel_adv - mean) / std
+            output = self.model(norm_input)
+
+            # 记录当前轮次目标类别的置信度
+            probs = torch.softmax(output, dim=1)
+            target_conf = probs[0, target_id].item() * 100
+            history.append(round(target_conf, 2))
+
+            target = torch.tensor([target_id], dtype=torch.long, device=self.device)
+            criterion = torch.nn.CrossEntropyLoss()
+            loss = criterion(output, target)
+
+            self.model.zero_grad()
+            loss.backward()
+            grad = pixel_adv.grad.data
+
+            pixel_adv = pixel_adv - alpha * grad.sign()
+            perturbation = torch.clamp(pixel_adv - pixel_orig, -epsilon, epsilon)
+            pixel_adv = pixel_orig + perturbation
+            pixel_adv = torch.clamp(pixel_adv, 0.0, 1.0).detach()
+
+        total_perturbation = pixel_adv - pixel_orig
+        adv_tensor = (pixel_adv - mean) / std
+        return adv_tensor, total_perturbation, history
+
     def tensor_to_image(self, tensor: torch.Tensor) -> Image.Image:
         """
         将经过 ImageNet 归一化的张量还原为可显示的 PIL Image。
