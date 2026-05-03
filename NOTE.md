@@ -76,3 +76,11 @@
   - 多步迭代使攻击能沿着局部梯度持续优化，逐步逼近目标类别，对高置信度或语义差距大的目标（如 banana → cock）成功率远高于单步 FGSM。
 
 - **论文地址**：[*Towards Deep Learning Models Resistant to Adversarial Attacks*](https://arxiv.org/abs/1706.06083), Aleksander Madry et al., ICLR 2018.
+
+---
+
+### 预处理防御原理
+
+对抗扰动通常具有高频、局部化的空间结构。高斯模糊通过低通滤波平滑图像中的高频噪声，JPEG 压缩在 DCT 量化阶段丢弃高频分量——两者均能破坏对抗扰动的结构化特征，使模型恢复对原图类别的正确识别或降低攻击目标的置信度。
+
+- **论文地址**：[*Feature Squeezing: Detecting Adversarial Examples in Deep Neural Networks*](https://arxiv.org/abs/1704.01155), Weilin Xu et al., NDSS 2018.
