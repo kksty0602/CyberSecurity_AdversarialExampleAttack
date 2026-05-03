@@ -181,25 +181,22 @@ class AdversarialModel:
             return {"error": str(e)}
 
 
-# ==================== Web UI 缓存适配预留 ====================
-#
-# 说明：以下工厂函数供 Streamlit Web 端调用。
-# 在 Streamlit 环境中，取消下方注释并将装饰器替换为 @st.cache_resource，
-# 即可实现模型单例加载，避免网页刷新时重复加载 200MB+ 的权重文件。
-#
-# try:
-#     import streamlit as st
-#     _cache_decorator = st.cache_resource
-# except ImportError:
-#     def _cache_decorator(func=None, **kwargs):
-#         if func is not None:
-#             return func
-#         return lambda f: f
-#
-# @_cache_decorator
-# def get_adversarial_model() -> AdversarialModel:
-#     """全局缓存的模型工厂函数。"""
-#     return AdversarialModel()
+# ==================== Web UI 缓存适配 ====================
+
+try:
+    import streamlit as st
+    _cache_decorator = st.cache_resource
+except ImportError:
+    def _cache_decorator(func=None, **kwargs):
+        if func is not None:
+            return func
+        return lambda f: f
+
+
+@_cache_decorator
+def get_adversarial_model() -> "AdversarialModel":
+    """全局缓存的模型工厂函数，供 Streamlit 调用。"""
+    return AdversarialModel()
 
 
 def verify_environment() -> None:
