@@ -194,9 +194,10 @@ except ImportError:
 
 
 @_cache_decorator
-def get_adversarial_model() -> "AdversarialModel":
-    """全局缓存的模型工厂函数，供 Streamlit 调用。"""
-    return AdversarialModel()
+def get_adversarial_model() -> "AttackEngine":
+    """全局缓存的模型工厂函数，供 Streamlit 调用。返回 AttackEngine 以确保攻击方法可用。"""
+    from core.attack_engine import AttackEngine  # 懒加载避免循环导入
+    return AttackEngine()
 
 
 def verify_environment() -> None:
