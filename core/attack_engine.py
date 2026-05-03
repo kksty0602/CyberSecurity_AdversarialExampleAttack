@@ -2,7 +2,7 @@
 # 阶段二任务 2.1：构建定向攻击引擎基础架构
 # 功能：基于 AdversarialModel 扩展攻击相关基础方法，为后续 FGSM/PGD 定向攻击提供支持
 
-from typing import Optional, Tuple
+from typing import List, Optional, Tuple
 
 import numpy as np
 import torch
@@ -369,7 +369,7 @@ class AttackEngine(AdversarialModel):
         tensor = tensor * std + mean
 
         # 截断到合法像素范围 [0, 1]，再映射到 [0, 255]
-        tensor = torch.clamp(tensor, 0.0, 1.0)
+        tensor = torch.clamp(tensor, 0.0, 1.0).detach()
         arr = (tensor.permute(1, 2, 0).cpu().numpy() * 255).astype(np.uint8)
 
         return Image.fromarray(arr)
