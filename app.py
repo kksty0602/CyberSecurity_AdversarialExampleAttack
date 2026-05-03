@@ -8,12 +8,13 @@ import streamlit as st
 
 from core.loadModel import get_adversarial_model
 from components.attack_tab import render_attack_tab
+from components.defense_tab import render_defense_tab
 
 
 def main():
     st.set_page_config(
         page_title="ResNet50 对抗攻击演示",
-        page_icon="🛡️",
+        page_icon=None,
         layout="wide",
     )
 
@@ -31,8 +32,7 @@ def main():
         render_attack_tab(model)
 
     with tab_defense:
-        st.header("防御加固")
-        st.info("防御功能将在第二轮实现。请先在'攻击实验室'生成对抗样本。")
+        render_defense_tab(model)
 
 
 if __name__ == "__main__":
