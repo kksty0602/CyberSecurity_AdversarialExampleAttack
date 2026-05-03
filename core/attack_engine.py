@@ -200,8 +200,8 @@ class AttackEngine(AdversarialModel):
         perturbation = epsilon * pixel_grad.sign()
         pixel_adv = pixel_input - perturbation
 
-        # 7. 在像素空间执行合法的 [0, 1] 截断
-        pixel_adv = torch.clamp(pixel_adv, 0.0, 1.0)
+        # 7. 在像素空间执行合法的 [0, 1] 截断，并脱离计算图
+        pixel_adv = torch.clamp(pixel_adv, 0.0, 1.0).detach()
 
         # 8. 重新归一化，供模型后续推理
         adv_tensor = (pixel_adv - mean) / std
